@@ -1,6 +1,5 @@
 from langgraph.graph import StateGraph, END
 from langchain_core.prompts import ChatPromptTemplate
-from langchain.output_parsers import StructuredOutputParser, ResponseSchema
 from pydantic import BaseModel
 from typing import List, Dict
 from .tools import SOQLQueryTool

@@ -1,0 +1,148 @@
+{
+  "info": {
+    "name": "Smart Query API Tests",
+    "description": "Collection for testing the SmartQueryView endpoint with LLM-based classification",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Step 1: Classify NED Query",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": \"Who is John Smith?\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/smart-query/",
+          "host": ["{{base_url}}"],
+          "path": ["smart-query", ""]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Step 2: Complete NED Query",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": \"Who is John Smith?\",\n  \"query_type\": \"NED\",\n  \"metadata\": {\n    \"contact_id\": \"003Ws000004Fo3qIAC\",\n    \"today's_date\": \"2024-06-01\"\n  }\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/smart-query/",
+          "host": ["{{base_url}}"],
+          "path": ["smart-query", ""]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Step 1: Classify PVI Query",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": \"Show me case details\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/smart-query/",
+          "host": ["{{base_url}}"],
+          "path": ["smart-query", ""]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Step 2: Complete PVI Query",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": \"Show me case details\",\n  \"query_type\": \"PVI\",\n  \"case_id\": \"500Ws000004Fo3qIAC\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/smart-query/",
+          "host": ["{{base_url}}"],
+          "path": ["smart-query", ""]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "KQA Query (One Step)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": \"How do I reset my password?\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/smart-query/",
+          "host": ["{{base_url}}"],
+          "path": ["smart-query", ""]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "Test Various Query Types",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"query\": \"What are the business hours?\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/smart-query/",
+          "host": ["{{base_url}}"],
+          "path": ["smart-query", ""]
+        }
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8000",
+      "type": "string"
+    }
+  ]
+} 

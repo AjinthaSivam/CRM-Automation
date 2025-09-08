@@ -16,7 +16,7 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path
-from api.views import QueryView, KQAView, NEDView, PVIView
+from api.views import QueryView, KQAView, NEDView, PVIView, SmartQueryView
 
 
 urlpatterns = [
@@ -25,4 +25,5 @@ urlpatterns = [
     path("kqa/", KQAView.as_view(), name="kqa"),
     path("ned/", NEDView.as_view(), name="ned"),
     path("pvi/", PVIView.as_view(), name="pvi"),
+    path("smart-query/", SmartQueryView.as_view(), name="smart-query"),
 ]

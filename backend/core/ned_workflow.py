@@ -166,7 +166,6 @@ def orderitem_retrieval_node(state: NEDState) -> NEDState:
             FROM OrderItem
             WHERE Order.AccountId = '{account_id}'
             AND Order.EffectiveDate >= {effective_date}
-            LIMIT 10
         """
         result = SOQLQueryTool()._run(query)
         order_items = [
