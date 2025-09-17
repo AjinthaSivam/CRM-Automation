@@ -2,9 +2,9 @@ from langgraph.graph import StateGraph, END
 from langchain.prompts import PromptTemplate
 from langchain.output_parsers import StructuredOutputParser, ResponseSchema
 from pydantic import BaseModel
-from typing import List, Dict
+from typing import List, Dict, Any
 from .tools import SOSLQueryTool
-from .llm import llm
+from .llm import llm, get_llm
 import re
 import logging
 
@@ -20,9 +20,11 @@ class QAState(BaseModel):
     article_count: int = 0
     sosl_query: str = ""
     error: str = ""
+    node_outputs: List[Dict[str, Any]] = []
+    model_name: str = "70b"
 
 # Helper Functions
-def extract_search_terms(query: str) -> str:
+def extract_search_terms(query: str, model_name: str = "70b") -> str:
     search_terms_prompt = PromptTemplate(
         template="""
         You are a smart assistant that extracts useful search terms from user queries for a Salesforce SOSL search.
@@ -45,7 +47,8 @@ def extract_search_terms(query: str) -> str:
         """,
         input_variables=["query"]
     )
-    chain = search_terms_prompt | llm
+    current_llm = get_llm(model_name)
+    chain = search_terms_prompt | current_llm
     result = chain.invoke({"query": query})
     terms = result.content.strip()
     terms = terms.replace('```json', '').replace('```', '').strip()
@@ -88,7 +91,7 @@ def execute_sosl_query(search_terms: str) -> list:
         print(f"DEBUG: Error in execute_sosl_query: {str(e)}")
         return []
 
-def extract_answer(query: str, articles: list) -> str:
+def extract_answer(query: str, articles: list, model_name: str = "70b") -> str:
     answer_prompt = PromptTemplate(
         template="""
         Answer the query based on Salesforce Knowledge articles. Query: "{query}"
@@ -121,7 +124,8 @@ def extract_answer(query: str, articles: list) -> str:
         ]).get_format_instructions()}
     )
     articles_str = "\n".join([f"Title: {a['Title']}\nFAQ_Answer__c: {a.get('FAQ_Answer__c', '')}" for a in articles])
-    chain = answer_prompt | llm | StructuredOutputParser.from_response_schemas([
+    current_llm = get_llm(model_name)
+    chain = answer_prompt | current_llm | StructuredOutputParser.from_response_schemas([
         ResponseSchema(name="answer", description="A concise answer to the query.", type="string")
     ])
     result = chain.invoke({"query": query, "articles": articles_str})
@@ -131,17 +135,42 @@ def extract_answer(query: str, articles: list) -> str:
 # Nodes
 def extract_terms_node(state: QAState) -> QAState:
     try:
-        search_terms = extract_search_terms(state.query_text)
+        search_terms = extract_search_terms(state.query_text, state.model_name)
         print(search_terms)
-        return QAState(query_text=state.query_text, search_terms=search_terms)
+        node_output = {"search_terms": search_terms, "model_used": state.model_name}
+        node_outputs = state.node_outputs + [{"node": "extract_terms", "output": node_output}]
+        return QAState(
+            query_text=state.query_text, 
+            search_terms=search_terms,
+            model_name=state.model_name,
+            node_outputs=node_outputs
+        )
     except Exception as e:
         print(f"DEBUG: Error in extract_terms_node: {str(e)}")
-        return QAState(query_text=state.query_text, error=f"Search Terms Extraction Error: {str(e)}")
+        node_output = {"error": f"Search Terms Extraction Error: {str(e)}"}
+        node_outputs = state.node_outputs + [{"node": "extract_terms", "output": node_output}]
+        return QAState(
+            query_text=state.query_text, 
+            error=f"Search Terms Extraction Error: {str(e)}",
+            model_name=state.model_name,
+            node_outputs=node_outputs
+        )
 
 def search_articles_node(state: QAState) -> QAState:
     if state.error:
         print(f"DEBUG: Error in search_articles_node: {state.error}")
-        return state
+        node_output = {"error": state.error}
+        node_outputs = state.node_outputs + [{"node": "search_articles", "output": node_output}]
+        return QAState(
+            query_text=state.query_text,
+            search_terms=state.search_terms,
+            articles=state.articles,
+            sosl_query=state.sosl_query,
+            article_count=state.article_count,
+            error=state.error,
+            model_name=state.model_name,
+            node_outputs=node_outputs
+        )
     try:
         terms_list = [term.strip() for term in state.search_terms.split(',')]
         escaped_terms = [escape_sosl_term(term) for term in terms_list]
@@ -162,46 +191,90 @@ def search_articles_node(state: QAState) -> QAState:
                 for record in search_records
             ]
             print(articles)
+            node_output = {
+                "sosl_query": sosl_query,
+                "articles": articles,
+                "article_count": len(articles),
+                "model_used": state.model_name
+            }
+            node_outputs = state.node_outputs + [{"node": "search_articles", "output": node_output}]
             return QAState(
                 query_text=state.query_text,
                 search_terms=state.search_terms,
                 articles=articles,
                 sosl_query=sosl_query,
-                article_count=len(articles)
+                article_count=len(articles),
+                model_name=state.model_name,
+                node_outputs=node_outputs
             )
         except Exception as e:
             print(f"DEBUG: Error in execute_sosl_query: {str(e)}")
-            return QAState(query_text=state.query_text, error=f"Article Search Error: {str(e)}")
+            node_output = {"error": f"Article Search Error: {str(e)}"}
+            node_outputs = state.node_outputs + [{"node": "search_articles", "output": node_output}]
+            return QAState(
+                query_text=state.query_text, 
+                error=f"Article Search Error: {str(e)}",
+                model_name=state.model_name,
+                node_outputs=node_outputs
+            )
     except Exception as e:
-        return QAState(query_text=state.query_text, error=f"Article Search Error: {str(e)}")
+        node_output = {"error": f"Article Search Error: {str(e)}"}
+        node_outputs = state.node_outputs + [{"node": "search_articles", "output": node_output}]
+        return QAState(
+            query_text=state.query_text, 
+            error=f"Article Search Error: {str(e)}",
+            model_name=state.model_name,
+            node_outputs=node_outputs
+        )
 
 def extract_answer_node(state: QAState) -> QAState:
     if state.error or not state.articles:
         print(f"DEBUG: Error in extract_answer_node: {state.error}")
+        node_output = {
+            "answer": "No relevant information found",
+            "article_count": 0,
+            "error": state.error if state.error else "No articles found"
+        }
+        node_outputs = state.node_outputs + [{"node": "extract_answer", "output": node_output}]
         return QAState(
             query_text=state.query_text,
             search_terms=state.search_terms,
             articles=state.articles,
             answer="No relevant information found",
             article_count=0,
-            sosl_query=state.sosl_query
+            sosl_query=state.sosl_query,
+            error=state.error,
+            model_name=state.model_name,
+            node_outputs=node_outputs
         )
     try:
-        answer = extract_answer(state.query_text, state.articles)
+        answer = extract_answer(state.query_text, state.articles, state.model_name)
+        node_output = {
+            "answer": answer,
+            "article_count": len(state.articles),
+            "model_used": state.model_name
+        }
+        node_outputs = state.node_outputs + [{"node": "extract_answer", "output": node_output}]
         return QAState(
             query_text=state.query_text,
             search_terms=state.search_terms,
             articles=state.articles,
             answer=answer,
             article_count=len(state.articles),
-            sosl_query=state.sosl_query
+            sosl_query=state.sosl_query,
+            model_name=state.model_name,
+            node_outputs=node_outputs
         )
     except Exception as e:
         print(f"DEBUG: Error in extract_answer_node: {str(e)}")
+        node_output = {"error": f"Answer Extraction Error: {str(e)}"}
+        node_outputs = state.node_outputs + [{"node": "extract_answer", "output": node_output}]
         return QAState(
             query_text=state.query_text,
             error=f"Answer Extraction Error: {str(e)}",
-            sosl_query=state.sosl_query
+            sosl_query=state.sosl_query,
+            model_name=state.model_name,
+            node_outputs=node_outputs
         )
 
 # Workflow

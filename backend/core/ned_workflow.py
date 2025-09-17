@@ -4,7 +4,7 @@ from langchain.output_parsers import StructuredOutputParser, ResponseSchema
 from pydantic import BaseModel, Field
 from typing import Dict, List, Any
 from .tools import SOQLQueryTool
-from .llm import llm
+from .llm import llm, get_llm
 from datetime import datetime, timedelta
 
 # State Definition
@@ -19,8 +19,9 @@ class NEDState(BaseModel):
     product_id: str = ""
     error: str = ""
     node_outputs: List[Dict[str, Any]] = []
+    model_name: str = "70b"
 
-def call_llm_for_semantic_match(product_name: str, unique_products: List[Dict[str, str]]) -> Dict[str, Any]:
+def call_llm_for_semantic_match(product_name: str, unique_products: List[Dict[str, str]], model_name: str = "70b") -> Dict[str, Any]:
     response_schemas = [
         ResponseSchema(name="product_id", description="The ID of the most semantically similar product", type="string"),
         ResponseSchema(name="product_name", description="The name of the most semantically similar product", type="string"),
@@ -71,7 +72,8 @@ def call_llm_for_semantic_match(product_name: str, unique_products: List[Dict[st
         partial_variables={"format_instructions": output_parser.get_format_instructions()}
     )
     
-    chain = prompt | llm | output_parser
+    current_llm = get_llm(model_name)
+    chain = prompt | current_llm | output_parser
     return chain.invoke({
         "product_name": product_name,
         "products_str": products_str
@@ -83,11 +85,16 @@ def query_parsing_node(state: NEDState) -> NEDState:
         query_text = state.query_text
         contact_id = state.contact_id
         today_date = state.today_date
+        model_name = state.model_name
 
         if not contact_id or not today_date:
+            node_output = {"error": "Missing contact_id or today_date"}
+            node_outputs = state.node_outputs + [{"node": "query_parsing", "output": node_output}]
             return NEDState(
                 query_text=query_text,
-                error="Missing contact_id or today_date"
+                error="Missing contact_id or today_date",
+                model_name=model_name,
+                node_outputs=node_outputs
             )
 
         response_schemas = [
@@ -105,7 +112,8 @@ def query_parsing_node(state: NEDState) -> NEDState:
             input_variables=["query_text"],
             partial_variables={"format_instructions": output_parser.get_format_instructions()}
         )
-        chain = prompt | llm | output_parser
+        current_llm = get_llm(model_name)
+        chain = prompt | current_llm | output_parser
         extracted_data = chain.invoke({"query_text": query_text})
         product_name = extracted_data.get('product_name', 'Unknown Product')
         days = extracted_data.get('days', 7)
@@ -118,37 +126,37 @@ def query_parsing_node(state: NEDState) -> NEDState:
         today = datetime.strptime(today_date, '%Y-%m-%d')
         effective_date = (today - timedelta(days=days)).strftime('%Y-%m-%d')
 
+        node_output = {
+            "product_name": product_name,
+            "days": days,
+            "effective_date": effective_date,
+            "model_used": model_name
+        }
+        node_outputs = state.node_outputs + [{"node": "query_parsing", "output": node_output}]
+        
         return NEDState(
             query_text=query_text,
             contact_id=contact_id,
             product_name=product_name,
             today_date=today_date,
-            effective_date=effective_date
+            effective_date=effective_date,
+            model_name=model_name,
+            node_outputs=node_outputs
         )
     except Exception as e:
-        return NEDState(query_text=query_text, error=f"Query Parsing Error: {str(e)}")
+        node_output = {"error": f"Query Parsing Error: {str(e)}"}
+        node_outputs = state.node_outputs + [{"node": "query_parsing", "output": node_output}]
+        return NEDState(
+            query_text=query_text, 
+            error=f"Query Parsing Error: {str(e)}",
+            model_name=state.model_name,
+            node_outputs=node_outputs
+        )
 
 def account_retrieval_node(state: NEDState) -> NEDState:
     if state.error:
-        return state
-    try:
-        contact_id = state.contact_id
-        query = f"SELECT AccountId FROM Contact WHERE Id = '{contact_id}'"
-        result = SOQLQueryTool()._run(query)
-        account_id = result[0].get("AccountId", "None") if isinstance(result, list) and result else "None"
-        return NEDState(
-            query_text=state.query_text,
-            contact_id=state.contact_id,
-            product_name=state.product_name,
-            today_date=state.today_date,
-            effective_date=state.effective_date,
-            account_id=account_id
-        )
-    except Exception as e:
-        return NEDState(query_text=state.query_text, error=f"Account Retrieval Error: {str(e)}")
-
-def orderitem_retrieval_node(state: NEDState) -> NEDState:
-    if state.error or state.account_id == "None":
+        node_output = {"error": state.error}
+        node_outputs = state.node_outputs + [{"node": "account_retrieval", "output": node_output}]
         return NEDState(
             query_text=state.query_text,
             contact_id=state.contact_id,
@@ -156,7 +164,59 @@ def orderitem_retrieval_node(state: NEDState) -> NEDState:
             today_date=state.today_date,
             effective_date=state.effective_date,
             account_id=state.account_id,
-            order_items=[]
+            error=state.error,
+            model_name=state.model_name,
+            node_outputs=node_outputs
+        )
+    try:
+        contact_id = state.contact_id
+        query = f"SELECT AccountId FROM Contact WHERE Id = '{contact_id}'"
+        result = SOQLQueryTool()._run(query)
+        account_id = result[0].get("AccountId", "None") if isinstance(result, list) and result else "None"
+        
+        node_output = {
+            "account_id": account_id,
+            "soql_query": query
+        }
+        node_outputs = state.node_outputs + [{"node": "account_retrieval", "output": node_output}]
+        
+        return NEDState(
+            query_text=state.query_text,
+            contact_id=state.contact_id,
+            product_name=state.product_name,
+            today_date=state.today_date,
+            effective_date=state.effective_date,
+            account_id=account_id,
+            model_name=state.model_name,
+            node_outputs=node_outputs
+        )
+    except Exception as e:
+        node_output = {"error": f"Account Retrieval Error: {str(e)}"}
+        node_outputs = state.node_outputs + [{"node": "account_retrieval", "output": node_output}]
+        return NEDState(
+            query_text=state.query_text, 
+            error=f"Account Retrieval Error: {str(e)}",
+            model_name=state.model_name,
+            node_outputs=node_outputs
+        )
+
+def orderitem_retrieval_node(state: NEDState) -> NEDState:
+    if state.error or state.account_id == "None":
+        node_output = {
+            "order_items": [],
+            "error": state.error if state.error else "No account_id available"
+        }
+        node_outputs = state.node_outputs + [{"node": "orderitem_retrieval", "output": node_output}]
+        return NEDState(
+            query_text=state.query_text,
+            contact_id=state.contact_id,
+            product_name=state.product_name,
+            today_date=state.today_date,
+            effective_date=state.effective_date,
+            account_id=state.account_id,
+            order_items=[],
+            model_name=state.model_name,
+            node_outputs=node_outputs
         )
     try:
         account_id = state.account_id
@@ -172,6 +232,14 @@ def orderitem_retrieval_node(state: NEDState) -> NEDState:
             {"Product2Id": r["Product2Id"], "Product2.Name": r["Product2"]["Name"]}
             for r in result if "Product2Id" in r and "Product2" in r and "Name" in r["Product2"]
         ]
+        
+        node_output = {
+            "order_items": order_items,
+            "order_items_count": len(order_items),
+            "soql_query": query
+        }
+        node_outputs = state.node_outputs + [{"node": "orderitem_retrieval", "output": node_output}]
+        
         return NEDState(
             query_text=state.query_text,
             contact_id=state.contact_id,
@@ -179,10 +247,19 @@ def orderitem_retrieval_node(state: NEDState) -> NEDState:
             today_date=state.today_date,
             effective_date=state.effective_date,
             account_id=state.account_id,
-            order_items=order_items
+            order_items=order_items,
+            model_name=state.model_name,
+            node_outputs=node_outputs
         )
     except Exception as e:
-        return NEDState(query_text=state.query_text, error=f"OrderItem Retrieval Error: {str(e)}")
+        node_output = {"error": f"OrderItem Retrieval Error: {str(e)}"}
+        node_outputs = state.node_outputs + [{"node": "orderitem_retrieval", "output": node_output}]
+        return NEDState(
+            query_text=state.query_text, 
+            error=f"OrderItem Retrieval Error: {str(e)}",
+            model_name=state.model_name,
+            node_outputs=node_outputs
+        )
 
 def product_matching_node(state: NEDState) -> NEDState:
     if state.error or not state.order_items or state.product_name == "Unknown Product":
@@ -266,7 +343,7 @@ def product_matching_node(state: NEDState) -> NEDState:
         ]
 
         # Call LLM with structured output
-        llm_response = call_llm_for_semantic_match(product_name, unique_products)
+        llm_response = call_llm_for_semantic_match(product_name, unique_products, state.model_name)
         if not llm_response:
             raise Exception("LLM call failed or returned no response")
 
@@ -275,7 +352,8 @@ def product_matching_node(state: NEDState) -> NEDState:
             "product_id": llm_response.get("product_id", "null"),
             "product_name": llm_response.get("product_name", ""),
             "match_type": llm_response.get("match_type", "none"),
-            "reason": llm_response.get("reason", "No match found")
+            "reason": llm_response.get("reason", "No match found"),
+            "model_used": state.model_name
         }
         node_outputs = state.node_outputs + [{"node": "product_matching", "output": node_output}]
 
@@ -292,6 +370,7 @@ def product_matching_node(state: NEDState) -> NEDState:
             account_id=state.account_id,
             order_items=state.order_items,
             product_id=product_id,
+            model_name=state.model_name,
             node_outputs=node_outputs
         )
 
@@ -308,6 +387,7 @@ def product_matching_node(state: NEDState) -> NEDState:
             order_items=state.order_items,
             product_id="None",
             error=f"Product Matching Error: {str(e)}",
+            model_name=state.model_name,
             node_outputs=node_outputs
         )
 

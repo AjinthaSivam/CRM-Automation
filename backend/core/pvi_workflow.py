@@ -1,9 +1,9 @@
 from langgraph.graph import StateGraph, END
 from langchain_core.prompts import ChatPromptTemplate
 from pydantic import BaseModel
-from typing import List, Dict
+from typing import List, Dict, Any
 from .tools import SOQLQueryTool
-from .llm import llm
+from .llm import llm, get_llm
 import re
 import logging
 
@@ -19,6 +19,8 @@ class PVIState(BaseModel):
     knowledge_article_id: str = ""
     knowledge_article_title: str = ""
     error: str = ""
+    node_outputs: List[Dict[str, Any]] = []
+    model_name: str = "70b"
     
 # Query all knowledge articles from Knowledge__kav
 def fetch_knowledge_articles() -> List[Dict[str, str]]:
@@ -61,58 +63,133 @@ def case_retrieval_node(state: PVIState) -> PVIState:
         soql_query = f"SELECT Description,IssueId__c,Subject FROM Case WHERE Id = '{case_id}'"
 
         soql_result = SOQLQueryTool()._run(soql_query)
+        print(f"SOQL Result: {soql_result}")
         if isinstance(soql_result, list) and len(soql_result) > 0:
             record = soql_result[0]
             case_description = record.get('Description', '')
             case_subject = record.get('Subject', '')
             case_subject_terms = case_subject.split() if case_subject else []
+            
+            node_output = {
+                "case_description": case_description,
+                "case_subject": case_subject,
+                "case_subject_terms": case_subject_terms,
+                "soql_query": soql_query
+            }
+            node_outputs = state.node_outputs + [{"node": "case_retrieval", "output": node_output}]
+            
+            return PVIState(
+                query_text=state.query_text,
+                case_id=state.case_id,
+                case_description=case_description,
+                case_subject=case_subject,
+                case_subject_terms=case_subject_terms,
+                knowledge_article_id=state.knowledge_article_id,
+                knowledge_article_title=state.knowledge_article_title,
+                error=state.error,
+                model_name=state.model_name,
+                node_outputs=node_outputs
+            )
         else:
-            state.error = "No case found for the given ID"
-            return state
-
-        state.case_description = case_description
-        state.case_subject = case_subject
-        state.case_subject_terms = case_subject_terms
+            node_output = {"error": "No case found for the given ID"}
+            node_outputs = state.node_outputs + [{"node": "case_retrieval", "output": node_output}]
+            return PVIState(
+                query_text=state.query_text,
+                case_id=state.case_id,
+                case_description=state.case_description,
+                case_subject=state.case_subject,
+                case_subject_terms=state.case_subject_terms,
+                knowledge_article_id=state.knowledge_article_id,
+                knowledge_article_title=state.knowledge_article_title,
+                error="No case found for the given ID",
+                model_name=state.model_name,
+                node_outputs=node_outputs
+            )
 
     except Exception as e:
-        state.error = f"Error executing SOQL query: {str(e)}"
-        return state
-
-    return state
+        node_output = {"error": f"Error executing SOQL query: {str(e)}"}
+        node_outputs = state.node_outputs + [{"node": "case_retrieval", "output": node_output}]
+        return PVIState(
+            query_text=state.query_text,
+            case_id=state.case_id,
+            case_description=state.case_description,
+            case_subject=state.case_subject,
+            case_subject_terms=state.case_subject_terms,
+            knowledge_article_id=state.knowledge_article_id,
+            knowledge_article_title=state.knowledge_article_title,
+            error=f"Error executing SOQL query: {str(e)}",
+            model_name=state.model_name,
+            node_outputs=node_outputs
+        )
 
 def knowledge_article_retrieval_node(state: PVIState) -> PVIState:
   if state.error:
     print(f"Knowledge Article Node - Error: {state.error}")
-    return state
-
-  # case_subject = state.case_subject
-  # if not case_subject:
-  #     state.error = "no case subject available"
-  #     return state
+    node_output = {"error": state.error}
+    node_outputs = state.node_outputs + [{"node": "knowledge_article_retrieval", "output": node_output}]
+    return PVIState(
+        query_text=state.query_text,
+        case_id=state.case_id,
+        case_description=state.case_description,
+        case_subject=state.case_subject,
+        case_subject_terms=state.case_subject_terms,
+        knowledge_article_id=state.knowledge_article_id,
+        knowledge_article_title=state.knowledge_article_title,
+        error=state.error,
+        model_name=state.model_name,
+        node_outputs=node_outputs
+    )
 
   case_description = state.case_description
+  print(f"Case Description: {case_description}")
   if not case_description:
-      state.error = "no case description available"
-      return state
+      node_output = {"error": "no case description available"}
+      node_outputs = state.node_outputs + [{"node": "knowledge_article_retrieval", "output": node_output}]
+      return PVIState(
+          query_text=state.query_text,
+          case_id=state.case_id,
+          case_description=state.case_description,
+          case_subject=state.case_subject,
+          case_subject_terms=state.case_subject_terms,
+          knowledge_article_id=state.knowledge_article_id,
+          knowledge_article_title=state.knowledge_article_title,
+          error="no case description available",
+          model_name=state.model_name,
+          node_outputs=node_outputs
+      )
   
   KNOWLEDGE_ARTICLES = fetch_knowledge_articles()
 
   if not KNOWLEDGE_ARTICLES:
-      state.error = "no knowledge articles available"
-      return state
+      node_output = {"error": "no knowledge articles available"}
+      node_outputs = state.node_outputs + [{"node": "knowledge_article_retrieval", "output": node_output}]
+      return PVIState(
+          query_text=state.query_text,
+          case_id=state.case_id,
+          case_description=state.case_description,
+          case_subject=state.case_subject,
+          case_subject_terms=state.case_subject_terms,
+          knowledge_article_id=state.knowledge_article_id,
+          knowledge_article_title=state.knowledge_article_title,
+          error="no knowledge articles available",
+          model_name=state.model_name,
+          node_outputs=node_outputs
+      )
 
   # Prepare article titles for LLM
   article_titles = "\n".join([f"{article['Id']}: {article['Title']}" for article in KNOWLEDGE_ARTICLES])
+  print(f"Article Titles: {article_titles}")
 
   try:
       # Call LLM to select the most relevant article
-      response = llm.invoke(
+      current_llm = get_llm(state.model_name)
+      response = current_llm.invoke(
           prompt.format(
-              # case_subject=case_subject,
               case_description=case_description,
               article_titles=article_titles
           )
       )
+      print(f"Response: {response}")
       knowledge_article_id = response.content.strip()
       # Validate the ID and fetch title
       knowledge_article_title = ""
@@ -123,14 +200,42 @@ def knowledge_article_retrieval_node(state: PVIState) -> PVIState:
                   break
           else:
               knowledge_article_id = ""  # Invalid ID, reset
+      
+      node_output = {
+          "knowledge_article_id": knowledge_article_id,
+          "knowledge_article_title": knowledge_article_title,
+          "available_articles_count": len(KNOWLEDGE_ARTICLES),
+          "model_used": state.model_name
+      }
+      node_outputs = state.node_outputs + [{"node": "knowledge_article_retrieval", "output": node_output}]
+      
+      return PVIState(
+          query_text=state.query_text,
+          case_id=state.case_id,
+          case_description=state.case_description,
+          case_subject=state.case_subject,
+          case_subject_terms=state.case_subject_terms,
+          knowledge_article_id=knowledge_article_id,
+          knowledge_article_title=knowledge_article_title,
+          error=state.error,
+          model_name=state.model_name,
+          node_outputs=node_outputs
+      )
   except Exception as e:
-      state.error = f"error in LLM processing: {str(e)}"
-      knowledge_article_id = ""
-      knowledge_article_title = ""
-
-  state.knowledge_article_id = knowledge_article_id
-  state.knowledge_article_title = knowledge_article_title
-  return state
+      node_output = {"error": f"error in LLM processing: {str(e)}"}
+      node_outputs = state.node_outputs + [{"node": "knowledge_article_retrieval", "output": node_output}]
+      return PVIState(
+          query_text=state.query_text,
+          case_id=state.case_id,
+          case_description=state.case_description,
+          case_subject=state.case_subject,
+          case_subject_terms=state.case_subject_terms,
+          knowledge_article_id="",
+          knowledge_article_title="",
+          error=f"error in LLM processing: {str(e)}",
+          model_name=state.model_name,
+          node_outputs=node_outputs
+      )
 
 pvi_workflow = StateGraph(PVIState)
 

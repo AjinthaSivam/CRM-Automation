@@ -20,12 +20,21 @@ class SmartQueryView(APIView):
             query = str(data.get('query', '')).strip()
             query_type = data.get('query_type', None)
             metadata = data.get('metadata', {})
+            model_name = data.get('model', '70b')  # Default to 70b model
 
-            logger.info(f"SmartQueryView request: query='{query}', query_type={query_type}, metadata={metadata}")
+            logger.info(f"SmartQueryView request: query='{query}', query_type={query_type}, metadata={metadata}, model={model_name}")
 
             if not query:
                 logger.error("Query is missing in SmartQueryView")
                 return Response({"error": "Query is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Validate model selection
+            from core.llm import AVAILABLE_MODELS
+            if model_name not in AVAILABLE_MODELS:
+                logger.error(f"Invalid model: {model_name}")
+                return Response({
+                    "error": f"Invalid model '{model_name}'. Available models: {list(AVAILABLE_MODELS.keys())}"
+                }, status=status.HTTP_400_BAD_REQUEST)
 
             # Step 1: If query_type is not provided, classify and prompt/run KQA
             if not query_type:
@@ -38,23 +47,27 @@ class SmartQueryView(APIView):
                     return Response({
                         "prompt": "Please provide contact_id and today's_date for NED workflow.",
                         "query_type": "NED",
-                        "error": ""
+                        "error": "",
+                        "node_outputs": []
                     }, status=status.HTTP_200_OK)
                 elif task_type == "PVI":
                     logger.info("Prompting for PVI case_id")
                     return Response({
                         "prompt": "Please provide case_id for PVI workflow.",
                         "query_type": "PVI",
-                        "error": ""
+                        "error": "",
+                        "node_outputs": []
                     }, status=status.HTTP_200_OK)
                 else:  # KQA
-                    logger.info("Running KQA workflow immediately")
-                    result = qa_app.invoke({"query_text": query})
+                    logger.info(f"Running KQA workflow immediately with model {model_name}")
+                    result = qa_app.invoke({"query_text": query, "model_name": model_name})
                     logger.info(f"KQA workflow completed successfully")
                     return Response({
                         "query_type": "KQA",
                         "result": result,
-                        "error": ""
+                        "error": "",
+                        "model_used": model_name,
+                        "node_outputs": result.get('node_outputs', [])
                     }, status=status.HTTP_200_OK)
 
             # Step 2: If query_type is provided, run the corresponding workflow
@@ -69,17 +82,20 @@ class SmartQueryView(APIView):
                         "error": "contact_id and today's_date are required for NED"
                     }, status=status.HTTP_400_BAD_REQUEST)
                 
-                logger.info(f"Running NED workflow with contact_id={contact_id}, today_date={today_date}")
+                logger.info(f"Running NED workflow with contact_id={contact_id}, today_date={today_date}, model={model_name}")
                 result = ned_app.invoke({
                     "query_text": query,
                     "contact_id": contact_id,
-                    "today_date": today_date
+                    "today_date": today_date,
+                    "model_name": model_name
                 })
                 logger.info("NED workflow completed successfully")
                 return Response({
                     "query_type": "NED",
                     "result": result,
-                    "error": ""
+                    "error": "",
+                    "model_used": model_name,
+                    "node_outputs": result.get('node_outputs', [])
                 }, status=status.HTTP_200_OK)
 
             elif query_type == "PVI":
@@ -90,13 +106,15 @@ class SmartQueryView(APIView):
                         "error": "case_id is required for PVI"
                     }, status=status.HTTP_400_BAD_REQUEST)
                 
-                logger.info(f"Running PVI workflow with case_id={case_id}")
-                result = pvi_app.invoke({"case_id": case_id})
+                logger.info(f"Running PVI workflow with case_id={case_id}, model={model_name}")
+                result = pvi_app.invoke({"case_id": case_id, "model_name": model_name})
                 logger.info("PVI workflow completed successfully")
                 return Response({
                     "query_type": "PVI",
                     "result": result,
-                    "error": ""
+                    "error": "",
+                    "model_used": model_name,
+                    "node_outputs": result.get('node_outputs', [])
                 }, status=status.HTTP_200_OK)
 
             else:
@@ -120,10 +138,12 @@ class QueryView(APIView):
                 query_input = data.strip()
                 metadata = None
                 query_type = None
+                model_name = "70b"
             else:
                 query_input = str(data.get('query', '')).strip()
                 metadata = data.get('metadata', None)
                 query_type = data.get('query_type', None)
+                model_name = data.get('model', '70b')
 
                 # Validate metadata format
                 if metadata and isinstance(metadata, dict):
@@ -142,25 +162,33 @@ class QueryView(APIView):
                             status=status.HTTP_400_BAD_REQUEST
                         )
 
-            logger.info(f"Processed request: query='{query_input}', metadata={metadata}, query_type={query_type}")
+            logger.info(f"Processed request: query='{query_input}', metadata={metadata}, query_type={query_type}, model={model_name}")
 
             if not query_input:
                 logger.error("Query is missing")
                 return Response({"error": "Query is required"}, status=status.HTTP_400_BAD_REQUEST)
 
+            # Validate model selection
+            from core.llm import AVAILABLE_MODELS
+            if model_name not in AVAILABLE_MODELS:
+                logger.error(f"Invalid model: {model_name}")
+                return Response({
+                    "error": f"Invalid model '{model_name}'. Available models: {list(AVAILABLE_MODELS.keys())}"
+                }, status=status.HTTP_400_BAD_REQUEST)
+
             # Run initial query to classify if query_type is not provided
             if not query_type:
-                result = process_initial_query(query_input, metadata=metadata)
+                result = process_initial_query(query_input, metadata=metadata, model_name=model_name)
                 logger.info(f"Initial query result: {result}")
                 if 'prompt' in result:
                     return Response(
-                        {"prompt": result['prompt'], "query_type": result['query_type'], "error": result['error']},
+                        {"prompt": result['prompt'], "query_type": result['query_type'], "error": result['error'], "model_used": model_name},
                         status=status.HTTP_200_OK
                     )
                 query_type = result['query_type']
 
             # Process the query
-            result = process_query(query_input, metadata=metadata, query_type=query_type)
+            result = process_query(query_input, metadata=metadata, query_type=query_type, model_name=model_name)
             logger.info(f"Query processing result: {result}")
             return Response(result, status=status.HTTP_200_OK)
 
@@ -171,15 +199,25 @@ class QueryView(APIView):
 class KQAView(APIView):
     def post(self, request):
         try:
-            data = request.data.get('query', '')
-            logger.info(f"Raw KQA request data: {data}")
+            data = request.data
+            query = data.get('query', '') if isinstance(data, dict) else data
+            model_name = data.get('model', '70b') if isinstance(data, dict) else '70b'
+            logger.info(f"Raw KQA request data: query='{query}', model={model_name}")
 
-            if not data:
+            if not query:
                 logger.error("Query is missing")
                 return Response({"error": "Query is required"}, status=status.HTTP_400_BAD_REQUEST)
 
+            # Validate model selection
+            from core.llm import AVAILABLE_MODELS
+            if model_name not in AVAILABLE_MODELS:
+                logger.error(f"Invalid model: {model_name}")
+                return Response({
+                    "error": f"Invalid model '{model_name}'. Available models: {list(AVAILABLE_MODELS.keys())}"
+                }, status=status.HTTP_400_BAD_REQUEST)
+
             # Run the KQA workflow
-            result = qa_app.invoke({"query_text": data})
+            result = qa_app.invoke({"query_text": query, "model_name": model_name})
             logger.info(f"KQA result: {result}")
             
             return Response({
@@ -187,7 +225,9 @@ class KQAView(APIView):
                 "error": result.get("error", ""),
                 "search_terms": result.get("search_terms", ""),
                 "sosl_query": result.get("sosl_query", ""),
-                "article_count": result.get("article_count", 0)
+                "article_count": result.get("article_count", 0),
+                "model_used": model_name,
+                "node_outputs": result.get("node_outputs", [])
             }, status=status.HTTP_200_OK)
 
         except Exception as e:
@@ -203,6 +243,7 @@ class NEDView(APIView):
             # Extract required fields
             query_text = str(data.get('query', '')).strip()
             metadata = data.get('metadata', {})
+            model_name = data.get('model', '70b')
             
             # Validate required metadata
             contact_id = str(metadata.get('contact_id', '')).strip()
@@ -211,6 +252,14 @@ class NEDView(APIView):
             if not query_text:
                 logger.error("Query is missing")
                 return Response({"error": "Query is required"}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Validate model selection
+            from core.llm import AVAILABLE_MODELS
+            if model_name not in AVAILABLE_MODELS:
+                logger.error(f"Invalid model: {model_name}")
+                return Response({
+                    "error": f"Invalid model '{model_name}'. Available models: {list(AVAILABLE_MODELS.keys())}"
+                }, status=status.HTTP_400_BAD_REQUEST)
 
             if not contact_id or not re.match(r'^003[a-zA-Z0-9]{15}$', contact_id):
                 logger.error(f"Invalid contact_id format: {contact_id}")
@@ -230,7 +279,8 @@ class NEDView(APIView):
             result = ned_app.invoke({
                 "query_text": query_text,
                 "contact_id": contact_id,
-                "today_date": today_date
+                "today_date": today_date,
+                "model_name": model_name
             })
             
             logger.info(f"NED result: {result}")
@@ -246,16 +296,26 @@ class PVIView(APIView):
             data = request.data
             logger.info(f"Raw PVI request data: {data}")
 
-            # Extract case ID from request
+            # Extract case ID and model from request
             case_id = str(data.get('case_id', '')).strip()
+            model_name = data.get('model', '70b')
             
             if not case_id:
                 logger.error("Case ID is missing")
                 return Response({"error": "Case ID is required"}, status=status.HTTP_400_BAD_REQUEST)
 
+            # Validate model selection
+            from core.llm import AVAILABLE_MODELS
+            if model_name not in AVAILABLE_MODELS:
+                logger.error(f"Invalid model: {model_name}")
+                return Response({
+                    "error": f"Invalid model '{model_name}'. Available models: {list(AVAILABLE_MODELS.keys())}"
+                }, status=status.HTTP_400_BAD_REQUEST)
+
             # Run the PVI workflow
             result = pvi_app.invoke({
-                "case_id": case_id
+                "case_id": case_id,
+                "model_name": model_name
             })
             
             logger.info(f"PVI result: {result}")
@@ -267,7 +327,9 @@ class PVIView(APIView):
                 "search_terms": result.get("case_subject_terms", []),
                 "knowledge_article_id": result.get("knowledge_article_id", ""),
                 "knowledge_article_title": result.get("knowledge_article_title", ""),
-                "error": result.get("error", "")
+                "error": result.get("error", ""),
+                "model_used": model_name,
+                "node_outputs": result.get("node_outputs", [])
             }
             
             return Response(response_data, status=status.HTTP_200_OK)
