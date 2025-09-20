@@ -24,11 +24,11 @@ class PVIState(BaseModel):
     
 # Query all knowledge articles from Knowledge__kav
 def fetch_knowledge_articles() -> List[Dict[str, str]]:
-    query = "SELECT Id, Title FROM Knowledge__kav"
+    query = "SELECT Id, Title, Summary FROM Knowledge__kav"
     try:
         result = SOQLQueryTool()._run(query)
         if isinstance(result, list):
-            articles = [{"Id": record["Id"], "Title": record.get("Title", "")} for record in result]
+            articles = [{"Id": record["Id"], "Title": record.get("Title", ""), "Summary": record.get("Summary", "")} for record in result]
             print(f"Fetched {len(articles)} knowledge articles")
             return articles
         else:
@@ -39,12 +39,18 @@ def fetch_knowledge_articles() -> List[Dict[str, str]]:
         return []
     
 prompt = ChatPromptTemplate.from_template(
-    """You are a Salesforce policy violation analyst. Your task is to analyze a case description and determine if it indicates a policy violation by matching it to the most relevant knowledge article title from a provided list. Return only the ID of the most relevant article, or an empty string ("") if the description does not indicate a policy violation or no article is relevant. If multiple articles seem relevant, choose the most specific match based on the description. Ensure the returned ID exactly matches one of the provided article IDs.
+    """You are a Salesforce policy violation analyst. Your task is to analyze a case description and and match it to the most relevant knowledge article summary, based on the issue described.
 
     Case description: "{case_description}"
+    
+    Instructions:
+    - Match the case to a knowledge article only if the summary addresses the same kind of issue (policy, process, or escalation).
+    - For product issues (e.g., size mismatches, incorrect items), match to an article if it explicitly addresses solutions like exchanges, refunds, or replacements.
+    - If no article covers the issue or the case is vague/general, return an empty string ("").
+    - If multiple articles seem relevant, pick the most specific one.
 
-    Knowledge article titles:
-    {article_titles}
+    Knowledge article summaries:
+    {article_summaries}
 
     Examples:
     - Case description: "The size chart on the website does not match the actual size of the Women's Running Tank Top."
@@ -177,8 +183,8 @@ def knowledge_article_retrieval_node(state: PVIState) -> PVIState:
       )
 
   # Prepare article titles for LLM
-  article_titles = "\n".join([f"{article['Id']}: {article['Title']}" for article in KNOWLEDGE_ARTICLES])
-  print(f"Article Titles: {article_titles}")
+  article_summaries = "\n".join([f"{article['Id']}: {article['Title']} - {article['Summary']}" for article in KNOWLEDGE_ARTICLES])
+  print(f"Article Summaries: {article_summaries}")
 
   try:
       # Call LLM to select the most relevant article
@@ -186,7 +192,7 @@ def knowledge_article_retrieval_node(state: PVIState) -> PVIState:
       response = current_llm.invoke(
           prompt.format(
               case_description=case_description,
-              article_titles=article_titles
+              article_summaries=article_summaries
           )
       )
       print(f"Response: {response}")

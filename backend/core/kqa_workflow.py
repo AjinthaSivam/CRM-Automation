@@ -94,28 +94,27 @@ def execute_sosl_query(search_terms: str) -> list:
 def extract_answer(query: str, articles: list, model_name: str = "70b") -> str:
     answer_prompt = PromptTemplate(
         template="""
-        Answer the query based on Salesforce Knowledge articles. Query: "{query}"
-        Articles:
-        {articles}
-        
+        You are a Salesforce Knowledge Specialist tasked with answering a query based on Salesforce Knowledge articles. Your role is to extract a precise and concise answer directly from the FAQ_Answer__c field of the most relevant article. The query is: "{query}"
+        Below are the relevant Knowledge articles retrieved: {articles}
         Instructions:
-        1. Provide a complete answer that includes both the fact and the explanation/reasoning
-        2. If the answer is a specific number or date, explain why that number/date is important
-        3. If no relevant info, return "No relevant information found"
-        4. Do not include phrases like "According to the articles" or "Based on the information"
-        5. Keep answers clear and informative
-        
+            - Extract the answer verbatim from the FAQ_Answer__c field of the article that best matches the query's focus (e.g., actions, time frames, or specific features), ensuring all key details are included without omissions.
+            - If the FAQ_Answer__c field is unavailable or incomplete, provide a concise summary of the most relevant information from the article’s content, capturing only the essential points that address the query’s intent.
+            - If multiple articles are relevant, select the one most closely aligned with the query’s specific focus.
+            - Before returning "No relevant information found," thoroughly re-evaluate the provided articles to confirm no relevant information exists.
+            - Should keep the answer exact, and aligned with the query’s intent, avoiding extraneous details or explanations.
+            - Format the response as a JSON object with an "answer" key.
+        {format_instructions}
         Examples:
         Query: "What technology features do Shoes & Clothings golf shoes have?"
         Answer: "Advanced sole technology and waterproof materials"
-        
+
         Query: "If opting for store credit, within how many days from the purchase date must you request it?"
         Answer: "90 days"
-        
+
         Query: "Can I get a full refund for damaged running shoes after 30 days?"
         Answer: "No, the request must be submitted within 30 days of the purchase date."
-        
-        {format_instructions}
+
+        Query: "{query}"
         """,
         input_variables=["query", "articles"],
         partial_variables={"format_instructions": StructuredOutputParser.from_response_schemas([
